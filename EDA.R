@@ -5,8 +5,9 @@ rm(list=ls())
 library(data.table)
 library(ggplot2)
 library(tidyr)
+library(forecast)
 
-setwd("~/Desktop/STRATEGY_ANALYTICS/Progresso")
+setwd("~/Desktop/Data Science/Capstone/Progresso")
 soup <- fread("soup_new.csv")
 
 # Data wrangling
@@ -105,20 +106,32 @@ linearModel1 <- lm(Volume.Progresso ~ Price.Progresso, data = soup)
 summary(linearModel1)
 
 # Create semi-log model
-soup[, logVolume.Progresso := log(Volume.Progresso)]
+soup[, c("logVolume.Campbell", "logVolume.Other", "logVolume.PL", "logVolume.Progresso") := lapply(.SD, log), .SDcols = 5:8]
 semiLogModel1 <- lm(logVolume.Progresso ~ Price.Progresso, data = soup)
 summary(semiLogModel1)
 
 # Create log-log model
-soup[, c("logPrice.Progresso", "logPrice.Campbell", "logPrice.PL", "logPrice.Other") := lapply(.SD, log), .SDcols = 9:12]
+soup[, c("logPrice.Campbell", "logPrice.Other", "logPrice.PL", "logPrice.Progresso") := lapply(.SD, log), .SDcols = 9:12]
 logModel1 <- lm(logVolume.Progresso ~ logPrice.Progresso, data = soup)
 summary(logModel1)
 logModel2 <- lm(logVolume.Progresso ~ logPrice.Progresso + logPrice.Campbell + logPrice.PL + logPrice.Other, data = soup)
 summary(logModel2)
 
-############################################################################################################
-# TODO: Create Price Elasticity Matrix, Vulnerability & Clout Brand Mapping
-############################################################################################################
+# Create Price Elasticity Matrix, Vulnerability & Clout Brand Mapping using log-log models
+
+progresso_pe <- logModel2
+campbell_pe <- lm(logVolume.Campbell ~ logPrice.Progresso + logPrice.Campbell + logPrice.PL + logPrice.Other, data = soup)
+PL_pe <- lm(logVolume.PL ~ logPrice.Progresso + logPrice.Campbell + logPrice.PL + logPrice.Other, data = soup)
+other_pe <- lm(logVolume.Other ~ logPrice.Progresso + logPrice.Campbell + logPrice.PL + logPrice.Other, data = soup)
+
+PriceElasticityMatrix <- lapply(c("progresso_pe", "campbell_pe", "PL_pe", "other_pe"), function(models) get(models)$coefficients[-1])
+PriceElasticityMatrix <- t(matrix(unlist(PriceElasticityMatrix), nrow = 4))
+Vulnerability <- round(apply(PriceElasticityMatrix, 1, sum),2)
+Clout <- round(apply(PriceElasticityMatrix, 2, sum),2)
+brandMap <- as.data.frame(cbind(c("Progresso", "Campbell", "PL", "Other"), Vulnerability, Clout))
+
+ggplot(brandMap, aes(x= Vulnerability, y= Clout, label = V1)) + geom_point() +
+    geom_text(aes(label=V1),hjust=0, vjust=0)
 
 # Control for seasonality; add in the winter dummy variable
 logModel3 <- lm(logVolume.Progresso ~ logPrice.Progresso + logPrice.Campbell + logPrice.PL + logPrice.Other + winter,
@@ -147,8 +160,6 @@ regionalModels <- lapply(unique(soup[,Region]),
 lapply(regionalModels, summary)
 
 # Compare models using AIC/BIC (the lower the better) - penalize for size of models [avoid overfitting]
-# AIC is better in situations when a false negative finding would be considered more misleading than a false positive.
-# BIC is better in situations where a false positive is as misleading as, or more misleading than, a false negative.
 
 # Linear vs semi-log vs log-log
 AIC(linearModel1, semiLogModel1, logModel1)
@@ -264,7 +275,7 @@ ui <- dashboardPage(skin = "red", header, sidebar, body)
 
 # create the server functions for the dashboard
 server <- function(input, output) {
-    
+
     # fluid row 1, kpi 1: volume sold
     output$volumeSold <- renderValueBox({
         valueBox(
@@ -274,7 +285,7 @@ server <- function(input, output) {
         color = "blue"
         )
     })
-    
+
     # fluid row 1, kpi 2: market share
     output$marketShare <- renderValueBox({
         valueBox(
@@ -284,7 +295,7 @@ server <- function(input, output) {
         color = "blue"
         )
     })
-    
+
     # fluid row 1, kpi 3: revenue generated in latest year
     output$revenueGenerated <- renderValueBox({
         valueBox(
@@ -294,21 +305,21 @@ server <- function(input, output) {
         color = "green"
         )
     })
-    
+
     # fluid row 2, graph 1: sales by region quarter bar graph
     output$priceByBrand <- renderPlot({
         ggplot(d, aes(x = brand, y = Price.ByBrand, fill = brand)) +
         geom_bar(stat = "identity") +
         geom_text(aes(label = round(Price.ByBrand, 1)), vjust = -1)
     })
-    
+
     # fluid row 2, graph 2: sales be region current/prior year
     output$volumeByBrand <- renderPlot({
         ggplot(f, aes(x = brand2, y = Volume.ByBrand, fill = brand2)) +
         geom_bar(stat = "identity") +
         geom_text(aes(label = round(Volume.ByBrand, 1)), vjust = -1)
     })
-    
+
     # fluid row 3, graph 1: Bar chart with confidence intervals faceted by region
     output$meanVolumeByMonthRegion <- renderPlot({
         ggplot(k[, winter := m < 4 | m > 9],
@@ -318,18 +329,18 @@ server <- function(input, output) {
         ymin = MeanVolume.ByMonthRegion - StdVolume.ByMonthRegion)) +
         facet_wrap(~Region, nrow=2)
     })
-    
+
     # fluid row 3, graph 2: Time series of price faceted by region
     output$priceByMonthRegion <- renderPlot({
         ggplot(l, aes(x = m, y = Price.ByMonthRegion, color = brand)) +
         geom_line() + geom_point() + facet_wrap(~Region, nrow = 1)
     })
-    
+
     # fluid row 4: data table "Sales by Model","Sales by Quarter","Prior Year Sales"
     output$byRegion <- renderDataTable(soup[,, by = Region])
     output$byMonth <- renderDataTable(soup[,, by = month_dummy])
     output$byYear <- renderDataTable(soup[,, by = year(Date)])
-    
+
     # fluid row 5: source of the data
     output$sourceBox <- renderInfoBox({
         infoBox(
@@ -339,7 +350,7 @@ server <- function(input, output) {
         icon = icon("tachometer")
         )
     })
-    
+
     # fluid row 5: source of the data
     output$nameBox <- renderInfoBox({
         infoBox(
@@ -349,28 +360,8 @@ server <- function(input, output) {
         icon = icon("code")
         )
     })
-    
+
 }
 
 # Render the dashboard as a shiny app
 shinyApp(ui, server)
-
-#########################################################################################################
-# TODO:
-# Still poor Adj R^2, AIC, BIC - need more features
-# Input interaction terms between log price and region
-#########################################################################################################
-
-
-#########################################################################################################
-# TODO:
-# Optimal Pricing
-#########################################################################################################
-
-
-#########################################################################################################
-# TODO:
-# Sales Forecasting using ARIMA
-#########################################################################################################
-
-
