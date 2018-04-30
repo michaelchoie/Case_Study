@@ -67,7 +67,7 @@ tidy_data[tidy_data$Price >= 10, "Price"] <- tidy_data[tidy_data$Price >= 10, "P
 
 # Check for normality - tests are robust but to stay on the safe side
 hist(tidy_data$Price, breaks = seq(0, 10 ,0.1))
-hist(tidy_data$Volume, breaks = seq())
+hist(tidy_data$Volume)
 
 # Is the difference of sales/price between companies statistically significant?
 fit <- aov(Volume ~ Company, data = tidy_data)
@@ -170,6 +170,7 @@ cowplot::plot_grid(pricing_time_series, market_share_time_series, revenue_time_s
 # Factorize month; set December as reference level
 data$month_dummy <- factor(months(data$Date), levels = month.name)
 data <- within(data, month_dummy <- relevel(data$month_dummy, ref = "December"))
+data <- within(data, Region <- relevel(Region, ref = "West"))
 
 # Log transform prices
 data$LogPrice.Progresso <- log(data$Price.Progresso)
@@ -177,7 +178,21 @@ data$LogPrice.Campbell <- log(data$Price.Campbell)
 data$LogPrice.PL <- log(data$Price.PL)
 data$LogPrice.Other <- log(data$Price.Other)
 
-log_model <- lm(LogPrice.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region, data = data)
+# Log transform volumes
+data$LogVolume.Progresso <- log(data$Volume.Progresso)
+data$LogVolume.Campbell <- log(data$Volume.Campbell)
+data$LogVolume.PL <- log(data$Volume.PL)
+data$LogVolume.Other <- log(data$Volume.Other)
+
+# Analyze models, from simple to complex
+log_model <- lm(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other, data = data)
+summary(log_model)
+log_model <- lm(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region, data = data)
+summary(log_model)
+log_model <- lm(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region + LogPrice.Campbell*Region + LogPrice.PL*Region + LogPrice.Other*Region, data = data)
+summary(log_model)
+log_model <- lm(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region + LogPrice.Campbell*Region + LogPrice.PL*Region + LogPrice.Other*Region +
+                month_dummy*Region, data = data)
 summary(log_model)
 
 # Evaluate residuals - passes normality test
@@ -191,7 +206,7 @@ cross_validation <- trainControl("cv", 10)
 
 # Create a function that can create different regression models with same parameters
 regression_model <- function(method) {
-  model <- train(LogPrice.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region,
+  model <- train(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region + LogPrice.Campbell*Region + LogPrice.PL*Region + LogPrice.Other*Region,
                data = train,
                method = method,
                trControl = cross_validation)
@@ -219,8 +234,37 @@ ggplot(model_performance, aes(x = type, y = performance, fill = type)) + geom_ba
 # CLOUT, VULNERABILITY, BRAND MAP
 ###################################################################################################################
 
-# Construct cross-price elasticity matrix to analyze competition
-# TODO
+# Construct cross-price elasticity matrix to analyze competition (strongest brands have low vulnerability and high clout)
+# Clout = How much can I gain from other firms by cutting my price
+# Vulnerability - How much can I lose to other firms if they cut their price?
+brandMap <- as.data.frame(matrix(nrow = 4, ncol = 4))
+colnames(brandMap) <- c("Campbell", "Progresso", "PL", "Other")
+rownames(brandMap) <- c("Campbell", "Progresso", "PL", "Other")
+
+Progresso_self_elasticity <- lm(LogVolume.Progresso ~ LogPrice.Progresso + month_dummy + Region, data = data)
+Progresso_log_model <- lm(LogVolume.Progresso ~ LogPrice.Campbell + LogPrice.PL + LogPrice.Other + month_dummy + Region, data = data)
+
+Campbell_self_elasticity <- lm(LogVolume.Campbell ~ LogPrice.Campbell + month_dummy + Region, data = data)
+Campbell_log_model <- lm(LogVolume.Campbell ~ LogPrice.Progresso + LogPrice.PL + LogPrice.Other + month_dummy + Region, data = data)
+
+PL_self_elasticity <- lm(LogVolume.PL ~ LogPrice.PL + month_dummy + Region, data = data)
+PL_log_model <- lm(LogVolume.PL ~ LogPrice.Campbell + LogPrice.Progresso + LogPrice.Other + month_dummy + Region, data = data)
+
+Other_self_elasticity <- lm(LogVolume.Other ~ LogPrice.Other + month_dummy + Region, data = data)
+Other_log_model <- lm(LogVolume.Other ~ LogPrice.Campbell + LogPrice.Progresso + LogPrice.PL + month_dummy + Region, data = data)
+
+brandMap[1, ] <- c(Campbell_self_elasticity$coefficients[2], Campbell_log_model$coefficients[2:4])
+brandMap[2, ] <- c(Progresso_log_model$coefficients[2], Progresso_self_elasticity$coefficients[2], Progresso_log_model$coefficients[3:4])
+brandMap[3, ] <- c(PL_log_model$coefficients[2:3], PL_self_elasticity$coefficients[2], PL_log_model$coefficients[4])
+brandMap[4, ] <- c(Other_log_model$coefficients[2:4], Other_self_elasticity$coefficients[2])
+
+# Plot the summary brand map
+brandMap
+vulnerability <- rowSums(brandMap)
+clout <- colSums(brandMap)
+summaryBrandMap <- data.frame(vulnerability, clout)
+summaryBrandMap$names <- rownames(summaryBrandMap)
+ggplot(summaryBrandMap, aes(x = vulnerability, y = clout)) + geom_point() + geom_text(aes(label = names), hjust = -0.2, vjust = 0)
 
 ###################################################################################################################
 # Shinydashboard
