@@ -266,6 +266,3 @@ summaryBrandMap <- data.frame(vulnerability, clout)
 summaryBrandMap$names <- rownames(summaryBrandMap)
 ggplot(summaryBrandMap, aes(x = vulnerability, y = clout)) + geom_point() + geom_text(aes(label = names), hjust = -0.2, vjust = 0)
 
-###################################################################################################################
-# Shinydashboard
-###################################################################################################################
